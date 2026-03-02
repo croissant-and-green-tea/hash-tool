@@ -1,31 +1,29 @@
-# .dockerignore - hash_tool
-#
-# Exclut du contexte de build Docker ce qui n'est pas nécessaire.
-# Réduit la taille du contexte envoyé au daemon.
-
-# Données utilisateur - jamais dans l'image
+# Données utilisateur
 examples/
 *.b3
 
 # Résultats
 resultats/
-~/integrity_resultats/
+integrity_resultats/
 
-# Tests - non requis dans l'image de production
+# Tests
 tests/
 
-# Documentation - non requise dans l'image
+# Documentation
 docs/
+site/
 autre/
 reports/
 *.md
 !README.md
 
 # Fichiers temporaires
-temp.txt
+*temp*
 *.tmp
 *.log
+*.bak
+temp.txt
 
-# Outils de développement
+# Outils de dev
 .git/
 .gitignore
