@@ -7,7 +7,7 @@
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/Alan45678/hash-tool
+git clone https://github.com/croissant-and-green-tea/hash-tool
 cd hash-tool
 ```
 
@@ -54,7 +54,7 @@ Si vous ne souhaitez pas installer `b3sum` et `jq` nativement :
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/Alan45678/hash-tool
+git clone https://github.com/croissant-and-green-tea/hash-tool
 cd hash-tool
 chmod +x hash-tool
 ```
@@ -91,7 +91,7 @@ Sortie attendue en mode Docker :
     Docker Desktop ne monte pas correctement les chemins Windows comme volumes.
     ```bash
     # Correct
-    cd ~ && git clone https://github.com/Alan45678/hash-tool
+    cd ~ && git clone https://github.com/croissant-and-green-tea/hash-tool
 
     # Incorrect — volumes non montés
     cd /mnt/c/Users/moi/Desktop && git clone ...

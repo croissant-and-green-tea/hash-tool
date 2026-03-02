@@ -26,7 +26,7 @@ hash-tool runner   -pipeline ./pipelines/pipeline.json
 
 ## Documentation complète
 
--> [Docs](https://alan45678.github.io/hash-tool/) 
+-> [Docs](https://croissant-and-green-tea.github.io/hash-tool/) 
 
 ## Licence
 

@@ -121,7 +121,7 @@ Pour intégrer un contrôle d'intégrité dans un pipeline externe :
 ```yaml
 - name: Vérifier l'intégrité des artefacts
   run: |
-    git clone https://github.com/Alan45678/hash-tool /tmp/hash-tool
+    git clone https://github.com/croissant-and-green-tea/hash-tool /tmp/hash-tool
     chmod +x /tmp/hash-tool/hash-tool /tmp/hash-tool/src/integrity.sh
     cd /tmp/hash-tool
 

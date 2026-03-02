@@ -114,7 +114,7 @@ df -T .
 
 ```bash
 cd ~
-git clone https://github.com/Alan45678/hash-tool
+git clone https://github.com/croissant-and-green-tea/hash-tool
 cd hash-tool
 chmod +x hash-tool runner.sh src/integrity.sh
 ```
