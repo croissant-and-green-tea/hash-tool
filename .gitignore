@@ -1,0 +1,49 @@
+# == Données utilisateur =======================================================
+*.b3
+*.b3.meta.json
+
+# == Résultats =================================================================
+resultats/
+integrity_resultats/
+
+# == Docker ====================================================================
+# Ne pas ignorer : Dockerfile, .dockerignore, docker-compose.yml, docker/
+# Ignorer les artefacts de build local
+.docker/
+
+# == Fichiers temporaires ======================================================
+# Exclure les fichiers contenant le mot "temp" n'importe où dans le nom
+*temp*
+!reports/template.html
+
+*.tmp
+*.log
+*.bak
+
+# == OS ========================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# == Éditeurs =================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# == doc perso =================================================================
+hors_git/
+
+# == fichiers utils de dev =================================================================
+.concat_config.json
+gentxt.txt
+*TODO*
+
+# == doc généree =================================================================
+site/
+
+
+
+
+

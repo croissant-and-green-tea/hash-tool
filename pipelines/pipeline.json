@@ -1,0 +1,24 @@
+{
+  "pipeline": [
+    {
+      "type":        "compute",
+      "params":      {
+        "input":      "/chemin/vers/dossier_source",
+        "output_dir": "/chemin/vers/bases",
+        "filename":   "hashes_source.b3"
+      },
+      "options":     { "quiet": false, "readonly": true },
+      "meta":        { "comment": "Snapshot initial" },
+      "description": "Calculer les empreintes du dossier source"
+    },
+    {
+      "type":        "verify",
+      "params":      {
+        "input": "/chemin/vers/dossier_source",
+        "base":  "/chemin/vers/bases/hashes_source.b3"
+      },
+      "options":     { "quiet": false },
+      "description": "Contrôle immédiat après compute"
+    }
+  ]
+}

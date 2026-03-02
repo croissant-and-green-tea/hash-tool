@@ -1,0 +1,73 @@
+# docker-compose.yml - hash_tool
+#
+# Cas d'usage typiques :
+#   docker compose run --rm integrity compute /data /bases/hashes.b3
+#   docker compose run --rm integrity verify  /bases/hashes.b3 /data
+#   docker compose run --rm integrity compare /bases/old.b3 /bases/new.b3
+#   docker compose run --rm pipeline
+#
+# Adapter les volumes (section x-volumes) selon l'environnement :
+#   - Windows/WSL   : /mnt/c/Users/TonNom/...
+#   - NAS Synology  : /volume1/...
+#   - Serveur Debian: /srv/...
+
+# == Chemins à adapter ========================================================
+x-volumes:
+  data:      &vol-data      /chemin/vers/donnees     # données à hacher (lecture seule)
+  bases:     &vol-bases     /chemin/vers/bases        # fichiers .b3
+  pipelines: &vol-pipelines /chemin/vers/pipelines   # fichiers pipeline.json
+  resultats: &vol-resultats /chemin/vers/resultats   # résultats compare/verify
+
+# == Services =================================================================
+services:
+
+  # Service principal - compute / verify / compare
+  integrity:
+    image: hash_tool
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - *vol-data:/data:ro
+      - *vol-bases:/bases
+      - *vol-resultats:/resultats
+    environment:
+      - RESULTATS_DIR=/resultats
+    # Pas de commande par défaut - passer la commande à docker compose run
+    # Ex : docker compose run --rm integrity verify /bases/hashes.b3 /data
+
+  # Service pipeline - exécute runner.sh avec pipeline.json monté
+  pipeline:
+    image: hash_tool
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - *vol-data:/data:ro
+      - *vol-bases:/bases
+      - *vol-pipelines:/pipelines
+      - *vol-resultats:/resultats
+    environment:
+      - RESULTATS_DIR=/resultats
+    command: ["runner", "/pipelines/pipeline.json"]
+
+  # Service cron - vérification périodique (optionnel)
+  # Nécessite : docker compose up -d cron
+  cron:
+    image: hash_tool
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - *vol-data:/data:ro
+      - *vol-bases:/bases:ro
+      - *vol-resultats:/resultats
+    environment:
+      - RESULTATS_DIR=/resultats
+      - CRON_SCHEDULE=0 3 * * *       # 03h00 chaque nuit
+      - CRON_BASE=/bases/hashes.b3    # base à vérifier
+    # Le service cron tourne en boucle - nécessite l'image étendue avec crond
+    # Voir docs/docker-cron.md pour le setup complet
+    command: ["shell"]
+    profiles: ["cron"]   # non démarré par défaut (docker compose --profile cron up)
+    restart: unless-stopped

@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ===========================================================================
+  # Tests fonctionnels + unitaires
+  # ===========================================================================
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restaurer les bits exécutables
+        run: |
+          chmod +x src/integrity.sh
+          chmod +x runner.sh
+          chmod +x hash-tool
+          chmod +x src/lib/*.sh
+          chmod +x docker/entrypoint.sh
+          chmod +x tests/run_tests.sh
+          chmod +x tests/run_tests_core.sh
+          chmod +x tests/run_tests_pipeline.sh
+
+      - name: Installer les dépendances
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y b3sum jq shellcheck
+
+      - name: Vérifier les prérequis
+        run: |
+          b3sum --version
+          jq --version
+          shellcheck --version
+          bash --version
+
+
+      - name: Debug T01
+        run: |
+          cd /tmp
+          mkdir -p integrity-debug/data
+          echo "test" > integrity-debug/data/f.txt
+          cd integrity-debug
+          bash /home/runner/work/hash-tool/hash-tool/src/integrity.sh compute ./data base.b3
+
+
+      - name: T00-T20 - integrity.sh (run_tests.sh)
+        run: |
+          chmod +x tests/run_tests.sh
+          cd tests && bash -x ./run_tests.sh 2>&1 | head -200
+
+      - name: TP01-TP12 - pipeline (run_tests_pipeline.sh)
+        run: |
+          chmod +x tests/run_tests_pipeline.sh
+          cd tests && ./run_tests_pipeline.sh
+
+      - name: CU01-CU53 - tests unitaires core.sh (run_tests_core.sh)
+        run: |
+          chmod +x tests/run_tests_core.sh
+          cd tests && ./run_tests_core.sh
+
+      - name: ShellCheck - tous les scripts
+        run: |
+          shellcheck src/integrity.sh
+          shellcheck runner.sh
+          shellcheck src/lib/core.sh
+          shellcheck src/lib/ui.sh
+          shellcheck src/lib/report.sh
+          shellcheck src/lib/results.sh
+          shellcheck docker/entrypoint.sh
+          shellcheck tests/run_tests.sh
+          shellcheck tests/run_tests_pipeline.sh
+          shellcheck tests/run_tests_core.sh
+
+      - name: Upload artefacts de test
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: /tmp/integrity-test*/
+          retention-days: 7
+
+
+
+  # ===========================================================================
+  # Tests Docker
+  # ===========================================================================
+  docker:
+    name: Docker build & smoke tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build de l'image
+        run: docker build -t hash_tool .
+
+      - name: Smoke test - version
+        run: docker run --rm hash_tool version
+
+      - name: Smoke test - help
+        run: docker run --rm hash_tool help
+
+      # - name: Smoke test - check-env
+      #   run: docker run --rm hash_tool check-env
+
+      - name: Smoke test - compute via volume
+        run: |
+          mkdir -p /tmp/testdata /tmp/testbases
+          echo "contenu alpha" > /tmp/testdata/alpha.txt
+          echo "contenu beta"  > /tmp/testdata/beta.txt
+          docker run --rm \
+            -v /tmp/testdata:/data:ro \
+            -v /tmp/testbases:/bases \
+            hash_tool compute /data /bases/test.b3
+          # Vérifie que le fichier .b3 est produit et non vide
+          [ -s /tmp/testbases/test.b3 ] || (echo "ERREUR : test.b3 vide ou absent" && exit 1)
+          echo "test.b3 produit : $(wc -l < /tmp/testbases/test.b3) ligne(s)"
+
+      - name: Smoke test - verify via volume
+        run: |
+          docker run --rm \
+            -v /tmp/testdata:/data:ro \
+            -v /tmp/testbases:/bases:ro \
+            -v /tmp/testresultats:/resultats \
+            -e RESULTATS_DIR=/resultats \
+            hash_tool verify /bases/test.b3 /data
+
+      - name: Entrypoint - commande inconnue -> exit non-zéro
+        run: |
+          docker run --rm hash_tool commande_inexistante && exit 1 || true
+
+
+# ===========================================================================
+  # Déploiement de la documentation
+  # ===========================================================================
+  docs:
+    name: Deploy docs to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [tests, docker]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer MkDocs et thème
+        run: pip install mkdocs mkdocs-material
+
+      - name: Build et déploiement
+        run: mkdocs gh-deploy --force

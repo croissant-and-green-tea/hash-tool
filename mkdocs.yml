@@ -1,0 +1,123 @@
+site_name: hash_tool
+site_description: Vérification d'intégrité de fichiers par hachage BLAKE3
+site_author: hash_tool
+docs_dir: docs
+site_dir: site
+
+repo_url: https://github.com/Alan45678/hash-tool
+repo_name: Alan45678/hash-tool
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: fr
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Passer en mode clair
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Passer en mode sombre
+  font:
+    text: DM Sans
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search:
+      lang: fr
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Alan45678/hash-tool
+
+nav:
+  - Accueil: index.md
+
+  - Démarrage:
+    - Prérequis: getting-started/prerequisites.md
+    - Installation: getting-started/installation.md
+    - Démarrage rapide: getting-started/quickstart.md
+
+  - Tutoriels:
+    - Vue d'ensemble: tutorials/index.md
+    - "T1 - Premier audit": tutorials/01-premier-audit.md
+    - "T2 - Vérifier une migration": tutorials/02-migration.md
+    - "T3 - Automatiser avec un pipeline": tutorials/03-automatisation.md
+
+  - Utilisation:
+    - Interface CLI: usage/cli.md
+    - Pipelines JSON: usage/pipeline.md
+    - Commandes:
+      - compute: usage/commands/compute.md
+      - verify: usage/commands/verify.md
+      - compare: usage/commands/compare.md
+      - list: usage/commands/list.md
+      - diff: usage/commands/diff.md
+      - stats: usage/commands/stats.md
+
+  - Docker:
+    - Setup: docker/setup.md
+    - Volumes: docker/volumes.md
+    - Docker Compose: docker/compose.md
+
+  - Guides:
+    - Vérifier une migration: guides/migration.md
+    - Volumes VeraCrypt: guides/veracrypt.md
+    - Automatisation & cron: guides/automation.md
+
+  - Référence:
+    - Formats de fichiers: reference/file-formats.md
+    - Sidecar .meta.json: reference/sidecar.md
+    - Fichiers de résultats: reference/output-files.md
+
+  - Troubleshooting:
+    - Index & diagnostic: troubleshooting/index.md
+    - Installation: troubleshooting/installation.md
+    - Exécution: troubleshooting/execution.md
+    - Docker: troubleshooting/docker.md
+    - Pipeline: troubleshooting/pipeline.md
+    - Résultats: troubleshooting/results.md
+
+  - Développement:
+    - Architecture: development/architecture.md
+    - Tests: development/testing.md
+    - CI/CD: development/ci.md

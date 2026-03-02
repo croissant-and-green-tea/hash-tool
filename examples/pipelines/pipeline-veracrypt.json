@@ -1,0 +1,45 @@
+{
+  "pipeline": [
+    {
+      "type":        "compute",
+      "params":      {
+        "input":      "/mnt/a/dossier_disque_1",
+        "output_dir": "/mnt/c/Users/TonNom/Desktop/bases",
+        "filename":   "hashes_disque_1.b3"
+      },
+      "options":     { "quiet": false, "readonly": true },
+      "meta":        { "comment": "Volume VeraCrypt disque 1 - snapshot initial" },
+      "description": "Empreintes du volume VeraCrypt monté sur /mnt/a"
+    },
+    {
+      "type":        "compute",
+      "params":      {
+        "input":      "/mnt/i/dossier_disque_2",
+        "output_dir": "/mnt/c/Users/TonNom/Desktop/bases",
+        "filename":   "hashes_disque_2.b3"
+      },
+      "options":     { "quiet": false, "readonly": true },
+      "meta":        { "comment": "Volume VeraCrypt disque 2 - snapshot initial" },
+      "description": "Empreintes du volume VeraCrypt monté sur /mnt/i"
+    },
+    {
+      "type":        "verify",
+      "params":      {
+        "input": "/mnt/a/dossier_disque_1",
+        "base":  "/mnt/c/Users/TonNom/Desktop/bases/hashes_disque_1.b3"
+      },
+      "options":     { "quiet": false },
+      "description": "Contrôle immédiat du volume 1 après compute"
+    },
+    {
+      "type":        "compare",
+      "params":      {
+        "reference":  "/mnt/c/Users/TonNom/Desktop/bases/hashes_disque_1.b3",
+        "input":      "/mnt/c/Users/TonNom/Desktop/bases/hashes_disque_2.b3",
+        "output_dir": "/mnt/c/Users/TonNom/Desktop/resultats/veracrypt"
+      },
+      "options":     { "quiet": false },
+      "description": "Audit croisé : vérifier que disque_1 et disque_2 sont identiques"
+    }
+  ]
+}

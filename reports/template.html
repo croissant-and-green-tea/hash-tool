@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1a1a1a;
+      --text-dim: #666666;
+      --border: #e0e0e0;
+      --accent-ok: #2e7d32;
+      --accent-err: #d32f2f;
+      --section-gap: 40px;
+      --mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      padding: 40px 20px;
+    }
+    .container { max-width: 850px; margin: 0 auto; }
+    header { border-bottom: 2px solid var(--text); margin-bottom: var(--section-gap); padding-bottom: 20px; }
+    h1 { font-size: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .comparison-path { font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim); margin-top: 10px; }
+    .summary-box { background: #f9f9f9; border: 1px solid var(--border); padding: 20px; margin-bottom: var(--section-gap); }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; }
+    .stat-item { display: flex; flex-direction: column; }
+    .stat-label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+    .stat-value { font-family: var(--mono); font-size: 1.3rem; font-weight: 500; }
+    section { margin-bottom: var(--section-gap); }
+    section h2 { font-size: 1.1rem; text-transform: uppercase; border-left: 4px solid var(--text); padding-left: 15px; margin-bottom: 20px; }
+    .info-list { display: grid; grid-template-columns: 200px 1fr; gap: 10px 20px; }
+    .info-label { color: var(--text-dim); font-size: 0.85rem; }
+    .info-value { font-family: var(--mono); font-size: 0.9rem; word-break: break-all; }
+    .file-list { list-style: none; border-top: 1px solid #f0f0f0; }
+    .file-list li { padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-family: var(--mono); font-size: 0.85rem; }
+    .empty-msg { font-style: italic; color: var(--text-dim); }
+    footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--text-dim); text-align: center; font-family: var(--mono); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>{{TITLE}}</h1>
+      <div class="comparison-path">{{PATHS}}</div>
+    </header>
+
+    <div class="summary-box">
+      <div class="summary-grid">
+        <div class="stat-item">
+          <span class="stat-label">Statut</span>
+          <span class="stat-value" style="color: {{STATUS_COLOR}}">{{STATUS_TEXT}}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Date d'analyse</span>
+          <span class="stat-value" style="font-size: 1rem">{{DATE}}</span>
+        </div>
+      </div>
+    </div>
+
+    <section>
+      <h2>Métadonnées</h2>
+      <div class="info-list">
+        {{METADATA_ROWS}}
+      </div>
+    </section>
+
+    <section>
+      <h2>Fichiers modifiés</h2>
+      {{LIST_MODIFIED}}
+    </section>
+
+    <section>
+      <h2>Fichiers disparus</h2>
+      {{LIST_DELETED}}
+    </section>
+
+    <section>
+      <h2>Nouveaux fichiers</h2>
+      {{LIST_NEW}}
+    </section>
+
+    <footer>
+      Généré par hash-tool · {{DATE}}
+    </footer>
+  </div>
+</body>
+</html>

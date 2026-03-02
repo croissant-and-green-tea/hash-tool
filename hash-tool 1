@@ -1,0 +1,705 @@
+#!/usr/bin/env bash
+# hash-tool - Interface CLI unique pour hash_tool
+#
+# Abstraction de la couche d'exécution : détecte automatiquement si l'exécution
+# native est possible (b3sum disponible), sinon délègue à Docker.
+#
+# Usage :
+#   hash-tool <commande> [options]
+#
+# Commandes :
+#   compute     Calcule les empreintes d'un dossier.
+#   verify      Vérifie l'intégrité d'un dossier à partir d'une base.
+#   compare     Compare deux bases d'empreintes.
+#   runner      Exécute un pipeline JSON.
+#   list        Liste les bases d'empreintes disponibles dans un dossier.
+#   diff        Affiche les différences entre une base et un dossier courant.
+#   stats       Affiche des statistiques sur une base d'empreintes.
+#   check-env   Analyse l'environnement d'exécution (natif ou conteneur).
+#   version     Affiche la version du logiciel.
+#   help        Affiche cette aide.
+#
+# Dépendances natives : bash >= 4, b3sum, jq
+# Dépendances Docker  : docker (image hash_tool)
+
+set -euo pipefail
+
+# == Version ===================================================================
+
+HASH_TOOL_VERSION="2.0.0"
+
+# == Résolution du répertoire du script ========================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INTEGRITY="$SCRIPT_DIR/src/integrity.sh"
+RUNNER="$SCRIPT_DIR/runner.sh"
+DOCKER_IMAGE="${HASH_TOOL_DOCKER_IMAGE:-hash_tool}"
+
+# == Couleurs ==================================================================
+
+_red()    { echo -e "\033[0;31m$*\033[0m"; }
+_green()  { echo -e "\033[0;32m$*\033[0m"; }
+_yellow() { echo -e "\033[0;33m$*\033[0m"; }
+_cyan()   { echo -e "\033[0;36m$*\033[0m"; }
+_dim()    { echo -e "\033[2m$*\033[0m"; }
+_bold()   { echo -e "\033[1m$*\033[0m"; }
+
+# == Détection de l'environnement ==============================================
+
+_native_available() {
+  command -v b3sum &>/dev/null \
+    && command -v jq   &>/dev/null \
+    && [ -f "$INTEGRITY" ] \
+    && [ -x "$INTEGRITY" ]
+}
+
+_docker_available() {
+  command -v docker &>/dev/null \
+    && docker image inspect "$DOCKER_IMAGE" &>/dev/null 2>&1
+}
+
+_detect_exec_mode() {
+  if _native_available; then
+    echo "native"
+  elif _docker_available; then
+    echo "docker"
+  else
+    echo "none"
+  fi
+}
+
+EXEC_MODE="$(_detect_exec_mode)"
+
+# == Helpers ===================================================================
+
+die() { echo "ERREUR : $*" >&2; exit 1; }
+
+_require_native_or_die() {
+  [ "$EXEC_MODE" = "native" ] || die "Exécution native requise pour cette commande (b3sum, jq, integrity.sh introuvables)."
+}
+
+# Argument parser : extrait les options nommées et les positionne dans des variables
+# Usage : _parse_args "$@"  -> positionne OPT_* variables
+_parse_args() {
+  OPT_DATA=""
+  OPT_BASE=""
+  OPT_OLD=""
+  OPT_NEW=""
+  OPT_PIPELINE=""
+  OPT_SAVE=""
+  OPT_META=""
+  OPT_QUIET=0
+  OPT_VERBOSE=0
+  OPT_READONLY=0
+  OPT_EXTRA=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -data)      OPT_DATA="$2";     shift 2 ;;
+      -base)      OPT_BASE="$2";     shift 2 ;;
+      -old)       OPT_OLD="$2";      shift 2 ;;
+      -new)       OPT_NEW="$2";      shift 2 ;;
+      -pipeline)  OPT_PIPELINE="$2"; shift 2 ;;
+      -save)      OPT_SAVE="$2";     shift 2 ;;
+      -meta)      OPT_META="$2";     shift 2 ;;
+      -quiet)     OPT_QUIET=1;       shift   ;;
+      -verbose)   OPT_VERBOSE=1;     shift   ;;
+      -readonly)  OPT_READONLY=1;    shift   ;;
+      -help|--help|-h) return 99     ;;  # signal d'aide
+      *)          OPT_EXTRA+=("$1"); shift   ;;
+    esac
+  done
+}
+
+# == Sidecar file ==============================================================
+
+# _sidecar_write <b3_path> <data_dir> [meta_comment]
+_sidecar_write() {
+  local b3_path="$1"
+  local data_dir="$2"
+  local comment="${3:-}"
+  local sidecar_path="${b3_path}.meta.json"
+
+  local nb_files
+  nb_files=$(wc -l < "$b3_path" 2>/dev/null || echo 0)
+
+  jq -n \
+    --arg version  "hash-tool v${HASH_TOOL_VERSION}" \
+    --arg date     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg comment  "$comment" \
+    --arg dir      "$data_dir" \
+    --argjson nb   "$nb_files" \
+    --argjson ro   "$OPT_READONLY" \
+    '{
+      created_by: $version,
+      date:       $date,
+      comment:    $comment,
+      parameters: {
+        directory:  $dir,
+        hash_algo:  "blake3",
+        readonly:   ($ro == 1),
+        nb_files:   $nb
+      }
+    }' > "$sidecar_path"
+
+  echo "Sidecar : $sidecar_path"
+}
+
+# _sidecar_read <b3_path>  ->  affiche le sidecar si présent
+_sidecar_read() {
+  local b3_path="$1"
+  local sidecar_path="${b3_path}.meta.json"
+  if [ -f "$sidecar_path" ]; then
+    echo "--- Métadonnées (sidecar) ---"
+    jq '.' "$sidecar_path" 2>/dev/null || cat "$sidecar_path"
+    echo "-----------------------------"
+  fi
+}
+
+# == Exécution native vs Docker ================================================
+
+# Wrapper : exécute integrity.sh en natif ou via Docker
+_run_integrity() {
+  if [ "$EXEC_MODE" = "native" ]; then
+    local quiet_flag=""
+    (( OPT_QUIET )) && quiet_flag="--quiet"
+    bash "$INTEGRITY" $quiet_flag "$@"
+  elif [ "$EXEC_MODE" = "docker" ]; then
+    _run_docker_integrity "$@"
+  else
+    die "Aucun environnement d'exécution disponible. Installez b3sum+jq ou construisez l'image Docker '${DOCKER_IMAGE}'."
+  fi
+}
+
+# Wrapper Docker pour integrity.sh
+_run_docker_integrity() {
+  local args=("$@")
+  # Volumes à monter selon la commande
+  local volumes=()
+
+  case "${args[0]}" in
+    compute)
+      volumes+=(-v "${args[1]}:/data:ro" -v "$(dirname "${args[2]}"):/bases")
+      set -- compute /data "/bases/$(basename "${args[2]}")"
+      ;;
+    verify)
+      local base_dir; base_dir="$(dirname "${args[1]}")"
+      local base_name; base_name="$(basename "${args[1]}")"
+      volumes+=(-v "${base_dir}:/bases:ro")
+      [ -n "${args[2]:-}" ] && volumes+=(-v "${args[2]}:/data:ro")
+      set -- verify "/bases/${base_name}" ${args[2]:+/data}
+      ;;
+    compare)
+      local dir_a; dir_a="$(dirname "${args[1]}")"
+      local dir_b; dir_b="$(dirname "${args[2]}")"
+      volumes+=(-v "${dir_a}:/bases_a:ro" -v "${dir_b}:/bases_b:ro")
+      if [ -n "${RESULTATS_DIR:-}" ]; then
+        volumes+=(-v "${RESULTATS_DIR}:/resultats")
+      fi
+      set -- compare "/bases_a/$(basename "${args[1]}")" "/bases_b/$(basename "${args[2]}")"
+      ;;
+    *)
+      die "Commande non supportée en mode Docker : ${args[0]}"
+      ;;
+  esac
+
+  docker run --rm "${volumes[@]}" \
+    -e RESULTATS_DIR="${RESULTATS_DIR:-/resultats}" \
+    "$DOCKER_IMAGE" "$@"
+}
+
+# == Commandes =================================================================
+
+# _check_help <subcmd> "$@"
+# Si le premier argument positionnel est "help", affiche l'aide de la sous-commande
+# et quitte. À appeler EN TÊTE de chaque cmd_* avant _parse_args.
+_check_help() {
+  local subcmd="$1"
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      help|--help|-h)
+        cmd_help "$subcmd"
+        exit 0
+        ;;
+    esac
+  done
+}
+
+cmd_compute() {
+  _check_help compute "$@"
+  _parse_args "$@"
+
+  # Vérification des paramètres obligatoires
+  [ -n "$OPT_DATA" ] || die "compute : -data <dossier> requis."
+  [ -d "$OPT_DATA" ] || die "compute : dossier introuvable : $OPT_DATA"
+
+  # 1. Préparation du dossier de sauvegarde
+  local save_dir="${OPT_SAVE:-.}"
+  mkdir -p "$save_dir"
+  
+  # 2. Calcul du chemin ABSOLU du dossier de sauvegarde pour le sous-shell
+  local save_dir_abs
+  save_dir_abs="$(cd "$save_dir" && pwd)"
+  
+  # 3. Détermination du nom du fichier .b3
+  local data_basename
+  data_basename="$(basename "$(realpath "$OPT_DATA")")"
+  local b3_file="${save_dir_abs}/hashes_${data_basename}.b3"
+
+  # 4. Exécution dans un sous-shell
+  # On utilise des guillemets autour de "$OPT_DATA" et "$b3_file" pour gérer les espaces
+  local data_abs
+  data_abs="$(cd "$OPT_DATA" && pwd)"
+  (
+    cd "$data_abs" || exit 1
+    _run_integrity compute "$data_abs" "$b3_file"
+  )
+
+  # 5. Écriture du Sidecar (Métadonnées)
+  # On vérifie si le fichier .b3 a bien été créé avant d'écrire le sidecar
+  if [ "$EXEC_MODE" = "native" ] && [ -f "$b3_file" ]; then
+    local data_path_abs
+    data_path_abs="$(realpath "$OPT_DATA")"
+    _sidecar_write "$b3_file" "$data_path_abs" "$OPT_META"
+  fi
+  # En mode Docker : sidecar déjà écrit par integrity.sh dans le conteneur
+}
+
+cmd_verify() {
+  _check_help verify "$@"
+  _parse_args "$@"
+  [ -n "$OPT_BASE" ] || die "verify : -base <fichier.b3> requis."
+
+  if [ -n "$OPT_SAVE" ]; then
+    export RESULTATS_DIR="$OPT_SAVE"
+    mkdir -p "$OPT_SAVE"
+  fi
+
+  _sidecar_read "$OPT_BASE"
+  _run_integrity verify "$OPT_BASE" ${OPT_DATA:+"$OPT_DATA"}
+}
+
+cmd_compare() {
+  _check_help compare "$@"
+  _parse_args "$@"
+  [ -n "$OPT_OLD" ] || die "compare : -old <ancienne.b3> requis."
+  [ -n "$OPT_NEW" ] || die "compare : -new <nouvelle.b3> requis."
+
+  if [ -n "$OPT_SAVE" ]; then
+    export RESULTATS_DIR="$OPT_SAVE"
+    mkdir -p "$OPT_SAVE"
+  fi
+
+  _sidecar_read "$OPT_OLD"
+  _sidecar_read "$OPT_NEW"
+  _run_integrity compare "$OPT_OLD" "$OPT_NEW"
+}
+
+cmd_runner() {
+  _check_help runner "$@"
+  _parse_args "$@"
+
+  local pipeline_file="${OPT_PIPELINE:-${SCRIPT_DIR}/pipelines/pipeline.json}"
+  [ -f "$pipeline_file" ] || die "runner : pipeline introuvable : $pipeline_file"
+
+  if [ -n "$OPT_SAVE" ]; then
+    export RESULTATS_DIR="$OPT_SAVE"
+    mkdir -p "$OPT_SAVE"
+  fi
+
+  if [ "$EXEC_MODE" = "native" ]; then
+    bash "$RUNNER" "$pipeline_file"
+  elif [ "$EXEC_MODE" = "docker" ]; then
+    local pipeline_dir; pipeline_dir="$(dirname "$(realpath "$pipeline_file")")"
+    local pipeline_name; pipeline_name="$(basename "$pipeline_file")"
+    docker run --rm \
+      -v "${pipeline_dir}:/pipelines:ro" \
+      -e RESULTATS_DIR="${RESULTATS_DIR:-/resultats}" \
+      "$DOCKER_IMAGE" runner "/pipelines/${pipeline_name}"
+  else
+    die "Aucun environnement d'exécution disponible."
+  fi
+}
+
+cmd_list() {
+  _check_help list "$@"
+  _parse_args "$@"
+  local dir="${OPT_DATA:-${OPT_BASE:-.}}"
+
+  echo "=== Bases d'empreintes dans : $dir ==="
+  echo ""
+
+  local found=0
+  while IFS= read -r -d '' f; do
+    found=1
+    local nb_files
+    nb_files=$(wc -l < "$f" 2>/dev/null || echo "?")
+    local size
+    size=$(du -sh "$f" 2>/dev/null | cut -f1 || echo "?")
+    local sidecar_flag=""
+    [ -f "${f}.meta.json" ] && sidecar_flag=" [+meta]"
+
+    printf "  %-40s  %6s fichiers  %5s%s\n" "$(basename "$f")" "$nb_files" "$size" "$sidecar_flag"
+
+    # Affiche le commentaire du sidecar si présent
+    if [ -f "${f}.meta.json" ]; then
+      local comment date
+      comment=$(jq -r '.comment // empty' "${f}.meta.json" 2>/dev/null || true)
+      date=$(jq -r '.date // empty' "${f}.meta.json" 2>/dev/null || true)
+      [ -n "$comment" ] && printf "  %s-> %s (%s)\n" "   " "$comment" "$date"
+    fi
+  done < <(find "$dir" -maxdepth 2 -name "*.b3" -type f -print0 | sort -z)
+
+  if (( found == 0 )); then
+    echo "  Aucune base .b3 trouvée dans : $dir"
+  fi
+}
+
+cmd_diff() {
+  _parse_args "$@"
+  [ -n "$OPT_BASE" ] || die "diff : -base <fichier.b3> requis."
+
+  local workdir="${OPT_DATA:-.}"
+  [ -d "$workdir" ] || die "diff : dossier introuvable : $workdir"
+
+  echo "=== DIFF : $(basename "$OPT_BASE") vs $workdir ==="
+  echo ""
+
+  # Fichiers dans la base
+  local tmp_base tmp_dir
+  tmp_base=$(mktemp)
+  tmp_dir=$(mktemp)
+  trap 'rm -f "$tmp_base" "$tmp_dir"' EXIT
+
+  # Extrait les chemins relatifs de la base (colonne 2+)
+  awk '{ print substr($0,67) }' "$OPT_BASE" | sort > "$tmp_base"
+
+  # Parcourt le dossier courant avec le même préfixe que la base
+  local prefix
+  prefix=$(awk '{ p=substr($0,67); sub(/[^/]+$/, "", p); print p; exit }' "$OPT_BASE" 2>/dev/null || echo "./")
+
+  find "$workdir" -type f | sed "s|^${workdir%/}/||" | sed "s|^|${prefix}|" | sort > "$tmp_dir"
+
+  local disparus nouveaux
+  disparus=$(comm -23 "$tmp_base" "$tmp_dir" | wc -l)
+  nouveaux=$(comm -13 "$tmp_base" "$tmp_dir" | wc -l)
+
+  echo "  Fichiers disparus depuis la base : $disparus"
+  if (( disparus > 0 )); then
+    comm -23 "$tmp_base" "$tmp_dir" | while IFS= read -r f; do
+      echo "    - $f"
+    done
+  fi
+  echo ""
+  echo "  Nouveaux fichiers non indexés : $nouveaux"
+  if (( nouveaux > 0 )); then
+    comm -13 "$tmp_base" "$tmp_dir" | while IFS= read -r f; do
+      echo "    + $f"
+    done
+  fi
+
+  rm -f "$tmp_base" "$tmp_dir"
+  trap - EXIT
+}
+
+cmd_stats() {
+  _parse_args "$@"
+  local b3_file="${OPT_BASE:-${OPT_EXTRA[0]:-}}"
+  [ -n "$b3_file" ] || die "stats : -base <fichier.b3> requis."
+  [ -f "$b3_file" ] || die "stats : fichier introuvable : $b3_file"
+
+  echo "=== Statistiques : $(basename "$b3_file") ==="
+  echo ""
+
+  local nb_files
+  nb_files=$(wc -l < "$b3_file")
+  local file_size
+  file_size=$(du -sh "$b3_file" | cut -f1)
+  local b3_path
+  b3_path=$(realpath "$b3_file")
+
+  printf "  Fichier base     : %s\n" "$b3_path"
+  printf "  Taille fichier   : %s\n" "$file_size"
+  printf "  Fichiers indexés : %s\n" "$nb_files"
+
+  # Extensions les plus fréquentes
+  echo ""
+  echo "  Extensions :"
+  awk '{print $NF}' "$b3_file" \
+    | grep -oE '\.[^./]+$' \
+    | sort | uniq -c | sort -rn | head -10 \
+    | while read -r count ext; do
+        printf "    %-12s  %5s fichiers\n" "$ext" "$count"
+      done
+
+  # Sidecar
+  if [ -f "${b3_file}.meta.json" ]; then
+    echo ""
+    _sidecar_read "$b3_file"
+  fi
+}
+
+cmd_check_env() {
+  echo "=== check-env : Analyse de l'environnement ==="
+  echo ""
+
+  # b3sum
+  if command -v b3sum &>/dev/null; then
+    local b3ver; b3ver=$(b3sum --version 2>/dev/null || echo "version inconnue")
+    _green "  [OK] b3sum disponible : $b3ver"
+  else
+    _red   "  [KO] b3sum introuvable (requis pour exécution native)"
+  fi
+
+  # jq
+  if command -v jq &>/dev/null; then
+    local jqver; jqver=$(jq --version 2>/dev/null || echo "version inconnue")
+    _green "  [OK] jq disponible : $jqver"
+  else
+    _red   "  [KO] jq introuvable (requis pour pipelines JSON)"
+  fi
+
+  # bash
+  _green "  [OK] bash $BASH_VERSION"
+  if (( BASH_VERSINFO[0] < 4 )); then
+    _red "  [KO] bash >= 4 requis"
+  fi
+
+  # integrity.sh
+  if [ -f "$INTEGRITY" ] && [ -x "$INTEGRITY" ]; then
+    _green "  [OK] integrity.sh présent et exécutable : $INTEGRITY"
+  else
+    _red   "  [KO] integrity.sh introuvable ou non exécutable : $INTEGRITY"
+  fi
+
+  # runner.sh
+  if [ -f "$RUNNER" ] && [ -x "$RUNNER" ]; then
+    _green "  [OK] runner.sh présent et exécutable : $RUNNER"
+  else
+    _red   "  [KO] runner.sh introuvable ou non exécutable : $RUNNER"
+  fi
+
+  # Docker
+  echo ""
+  if command -v docker &>/dev/null; then
+    local dver; dver=$(docker --version 2>/dev/null || echo "version inconnue")
+    _green "  [OK] Docker disponible : $dver"
+    if docker image inspect "$DOCKER_IMAGE" &>/dev/null 2>&1; then
+      _green "  [OK] Image Docker '$DOCKER_IMAGE' disponible"
+    else
+      _yellow "  [--] Image Docker '$DOCKER_IMAGE' absente (docker build requis)"
+    fi
+  else
+    _yellow "  [--] Docker non disponible (optionnel)"
+  fi
+
+  echo ""
+  echo "  Mode d'exécution sélectionné : $(_bold "$EXEC_MODE")"
+
+  case "$EXEC_MODE" in
+    native) _green "  -> Exécution native active" ;;
+    docker) _yellow "  -> Exécution Docker active (fallback)" ;;
+    none)   _red    "  -> Aucun environnement disponible - impossible d'exécuter" ;;
+  esac
+}
+
+cmd_version() {
+  echo "hash-tool v${HASH_TOOL_VERSION}"
+  echo "Moteur : BLAKE3 (b3sum)"
+  if command -v b3sum &>/dev/null; then
+    b3sum --version 2>/dev/null || true
+  fi
+}
+
+cmd_help() {
+  local subcmd="${1:-}"
+
+  case "$subcmd" in
+    compute)
+      cat <<'EOF'
+hash-tool compute -data <dossier> [-save <dossier>] [-meta <texte>] [-quiet] [-readonly]
+
+  Calcule les empreintes BLAKE3 de tous les fichiers du dossier source.
+  Génère un fichier .b3 et un sidecar .meta.json associé.
+
+  Options :
+    -data <dossier>   Dossier à analyser (requis).
+    -save <dossier>   Dossier de sortie pour le .b3 (défaut : répertoire courant).
+    -meta <texte>     Commentaire stocké dans le sidecar JSON.
+    -quiet            Mode silencieux (pas de sortie terminal).
+    -readonly         Documente le flag dans le sidecar (pas d'effet sur b3sum).
+
+  Exemple :
+    hash-tool compute -data ./donnees -save ./bases -meta "Snapshot initial"
+EOF
+      ;;
+    verify)
+      cat <<'EOF'
+hash-tool verify -base <fichier.b3> [-data <dossier>] [-save <dossier>] [-quiet]
+
+  Vérifie l'intégrité d'un dossier à partir d'une base d'empreintes.
+
+  Options :
+    -base <fichier.b3>  Base d'empreintes (requis).
+    -data <dossier>     Dossier à vérifier (défaut : répertoire courant au moment du compute).
+    -save <dossier>     Dossier de sortie des résultats (surcharge RESULTATS_DIR).
+    -quiet              Mode silencieux.
+
+  Exemple :
+    hash-tool verify -base ./bases/hashes_donnees.b3 -data ./donnees
+EOF
+      ;;
+    compare)
+      cat <<'EOF'
+hash-tool compare -old <ancienne.b3> -new <nouvelle.b3> [-save <dossier>]
+
+  Compare deux bases d'empreintes et produit un rapport HTML.
+
+  Options :
+    -old <ancienne.b3>  Ancienne base (référence).
+    -new <nouvelle.b3>  Nouvelle base (à comparer).
+    -save <dossier>     Dossier de sortie des résultats.
+
+  Exemple :
+    hash-tool compare -old snap1.b3 -new snap2.b3 -save ./rapports
+EOF
+      ;;
+    runner)
+      cat <<'EOF'
+hash-tool runner -pipeline <fichier.json> [-save <dossier>]
+
+  Exécute un pipeline JSON définissant une suite d'opérations.
+  Format pipeline : voir pipelines/pipeline-amelioree.json
+
+  Options :
+    -pipeline <fichier.json>  Fichier pipeline (défaut : pipelines/pipeline.json).
+    -save <dossier>           Dossier de résultats global (surcharge RESULTATS_DIR).
+
+  Exemple :
+    hash-tool runner -pipeline ./pipelines/mon_pipeline.json -save ./resultats
+EOF
+      ;;
+    list)
+      cat <<'EOF'
+hash-tool list [-data <dossier>]
+
+  Liste toutes les bases .b3 disponibles dans un dossier, avec leurs
+  métadonnées sidecar si présentes.
+
+  Options :
+    -data <dossier>  Dossier à parcourir (défaut : répertoire courant).
+
+  Exemple :
+    hash-tool list -data ./bases
+EOF
+      ;;
+    diff)
+      cat <<'EOF'
+hash-tool diff -base <fichier.b3> [-data <dossier>]
+
+  Affiche les différences entre une base d'empreintes et l'état actuel
+  d'un dossier (fichiers disparus, nouveaux fichiers non indexés).
+  Ne recalcule pas les hashes - uniquement comparaison des chemins.
+
+  Options :
+    -base <fichier.b3>  Base de référence (requis).
+    -data <dossier>     Dossier courant à comparer (défaut : .).
+
+  Exemple :
+    hash-tool diff -base ./bases/hashes_donnees.b3 -data ./donnees
+EOF
+      ;;
+    stats)
+      cat <<'EOF'
+hash-tool stats -base <fichier.b3>
+
+  Affiche des statistiques sur une base d'empreintes :
+  nombre de fichiers, taille, distribution des extensions, métadonnées sidecar.
+
+  Options :
+    -base <fichier.b3>  Base à analyser (requis).
+
+  Exemple :
+    hash-tool stats -base ./bases/hashes_donnees.b3
+EOF
+      ;;
+    check-env)
+      cat <<'EOF'
+hash-tool check-env
+
+  Analyse l'environnement d'exécution : vérifie la disponibilité de
+  b3sum, jq, bash >= 4, integrity.sh, runner.sh et Docker.
+  Indique le mode d'exécution sélectionné (natif ou Docker).
+EOF
+      ;;
+    *)
+      cat <<EOF
+hash-tool v${HASH_TOOL_VERSION} - Vérification d'intégrité BLAKE3
+
+Usage : hash-tool <commande> [options]
+
+Commandes :
+  compute     Calcule les empreintes d'un dossier.
+  verify      Vérifie l'intégrité d'un dossier à partir d'une base.
+  compare     Compare deux bases d'empreintes.
+  runner      Exécute un pipeline JSON.
+  list        Liste les bases d'empreintes disponibles.
+  diff        Affiche les différences entre une base et un dossier.
+  stats       Affiche des statistiques sur une base.
+  check-env   Analyse l'environnement d'exécution.
+  version     Affiche la version.
+  help        Affiche cette aide (ou 'help <commande>' pour le détail).
+
+Options générales :
+  -data <chemin>      Dossier à analyser.
+  -base <chemin>      Fichier base d'empreintes (.b3).
+  -old <chemin>       Ancienne base (pour compare).
+  -new <chemin>       Nouvelle base (pour compare).
+  -pipeline <chemin>  Fichier pipeline JSON (pour runner).
+  -save <chemin>      Dossier de sortie pour les résultats.
+  -meta <texte>       Commentaire pour le sidecar JSON (compute).
+  -quiet              Mode silencieux.
+  -verbose            Mode verbeux.
+  -readonly           Marque le compute comme lecture seule dans le sidecar.
+
+Mode d'exécution : $EXEC_MODE
+  L'interface reste identique quel que soit le mode d'exécution.
+  Docker est utilisé en fallback si l'exécution native est impossible.
+
+Exemples :
+  hash-tool compute   -data ./donnees -save ./bases -meta "Snapshot initial"
+  hash-tool verify    -base ./bases/hashes_donnees.b3 -data ./donnees
+  hash-tool compare   -old ancien.b3 -new nouveau.b3 -save ./rapports
+  hash-tool runner    -pipeline ./pipelines/pipeline.json
+  hash-tool list      -data ./bases
+  hash-tool diff      -base ./bases/hashes_donnees.b3 -data ./donnees
+  hash-tool stats     -base ./bases/hashes_donnees.b3
+  hash-tool check-env
+EOF
+      ;;
+  esac
+}
+
+# == Dispatch ==================================================================
+
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+  compute)   cmd_compute   "$@" ;;
+  verify)    cmd_verify    "$@" ;;
+  compare)   cmd_compare   "$@" ;;
+  runner)    cmd_runner    "$@" ;;
+  list)      cmd_list      "$@" ;;
+  diff)      cmd_diff      "$@" ;;
+  stats)     cmd_stats     "$@" ;;
+  check-env) cmd_check_env "$@" ;;
+  version)   cmd_version   "$@" ;;
+  help|-h|--help) cmd_help "$@" ;;
+  *)
+    echo "Commande inconnue : '$CMD'" >&2
+    echo "Utiliser : hash-tool help" >&2
+    exit 1
+    ;;
+esac

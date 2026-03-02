@@ -1,0 +1,45 @@
+{
+  "pipeline": [
+    {
+      "type":        "compute",
+      "params":      {
+        "input":      "/chemin/vers/source",
+        "output_dir": "/chemin/vers/bases",
+        "filename":   "hashes_source.b3"
+      },
+      "options":     { "quiet": false, "readonly": true },
+      "meta":        { "comment": "Snapshot source - avant migration" },
+      "description": "Empreintes du dossier source avant migration"
+    },
+    {
+      "type":        "verify",
+      "params":      {
+        "input": "/chemin/vers/source",
+        "base":  "/chemin/vers/bases/hashes_source.b3"
+      },
+      "options":     { "quiet": false },
+      "description": "Contrôle immédiat de la base source (détecte un compute corrompu avant de migrer)"
+    },
+    {
+      "type":        "compute",
+      "params":      {
+        "input":      "/chemin/vers/destination",
+        "output_dir": "/chemin/vers/bases",
+        "filename":   "hashes_destination.b3"
+      },
+      "options":     { "quiet": false, "readonly": true },
+      "meta":        { "comment": "Snapshot destination - après migration" },
+      "description": "Empreintes du dossier destination après migration"
+    },
+    {
+      "type":        "compare",
+      "params":      {
+        "reference":  "/chemin/vers/bases/hashes_source.b3",
+        "input":      "/chemin/vers/bases/hashes_destination.b3",
+        "output_dir": "/chemin/vers/resultats/migration"
+      },
+      "options":     { "quiet": false },
+      "description": "Rapport de comparaison source vs destination - 0 modifié + 0 disparu = migration validée"
+    }
+  ]
+}
